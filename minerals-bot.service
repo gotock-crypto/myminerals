@@ -1,0 +1,16 @@
+[Unit]
+Description=Telegram Minerals Content Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/minerals-bot/minerals_project
+EnvironmentFile=/opt/minerals-bot/minerals_project/.env
+ExecStart=/opt/minerals-bot/minerals_project/venv/bin/python /opt/minerals-bot/minerals_project/main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
