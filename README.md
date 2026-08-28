@@ -1,55 +1,75 @@
-# 💎 MyMinerals — AI Telegram Content Pipeline
+# 💎 MyMinerals — 3-pass AI Telegram Content Pipeline
 
 Автономный контентный pipeline для Telegram-канала о минералах и камнях.
 
-Проект генерирует публикации с помощью LLM, подбирает **реальные фотографии минералов** из внешних источников и автоматически публикует материал в Telegram.
-
-## Что делает pipeline
+## Архитектура контента
 
 ```text
-Scheduler
-   ↓
-Mineral selection
-   ↓
-Fact context
-   ↓
-LLM — готовый Telegram-пост
-   ↓
-Real image discovery
-   ├── Google Images
-   └── Wikimedia Commons
-   ↓
-Image validation / ranking / deduplication
-   ↓
+Scheduler / /test
+      ↓
+Выбор минерала
+      ↓
+Русская Wikipedia — фактический контекст
+      ↓
+PASS 1 — Groq/Qwen — автор
+      ↓
+PASS 2 — Mistral — фактчекер
+      ↓
+PASS 3 — Mistral — финальный редактор
+      ↓
+Локальный валидатор
+      ↓
+Wikimedia Commons + Google Images
+      ↓
+Проверка изображения / ranking / deduplication
+      ↓
 Telegram
-   ├── 📷 photo
-   └── 📝 full text
+   ├── 📷 фото
+   └── 📝 полный текст
 ```
 
-### Контент
+### 3-pass editorial agent
 
-LLM пишет **весь текст целиком одним вызовом**. Формат рассчитан на Telegram-публикацию с медиа, поэтому промпт просит писать компактно, содержательно и без лишней воды.
+Генерация не зависит от provider-side JSON mode: LLM получает обычный текстовый запрос и возвращает обычный текст. Это избегает проблем совместимости `response_format=json_object` с Groq/Qwen.
 
-В посте остаются два основных раздела:
+1. **Автор (Groq)** создаёт черновик.
+2. **Фактчекер (Mistral)** проверяет факты, структуру, повторы, обрывы и безопасность формулировок.
+3. **Финальный редактор (Mistral)** полностью переписывает материал в готовый Telegram-пост.
+4. Локальный валидатор проверяет обязательные разделы, длину, финальную фразу и отсутствие reasoning/медицинских обещаний.
 
-- 🔹 **Основные характеристики** — минералогические и справочные сведения.
-- 🔮 **Эзотерические свойства** — традиционные представления о камне с явным отделением их от научных фактов.
+Если Groq недоступен или упирается в лимит, используется Mistral fallback. Для редакционных проходов предпочтительная схема — `Groq → Mistral → Mistral`, чтобы не расходовать TPM Groq на повторные попытки.
 
-Текст не обрезается под лимит caption: фотография публикуется отдельным сообщением, а полный текст — следующим сообщением.
+### Формат поста
 
-### Изображения
+Финальный пост содержит пять разделов:
 
-Pipeline ищет **реальные фотографии**, а не генерирует изображения.
+- 🔹 **Основные характеристики**
+- 🌍 **Где встречается**
+- ✨ **Интересный факт**
+- 💎 **Применение**
+- 🔮 **Эзотерические свойства**
+
+Эзотерические утверждения отделяются от научных фактов и завершаются фразой:
+
+> Традиционные представления, не научно доказанные свойства.
+
+Текст публикуется отдельным Telegram-сообщением после фотографии. Это исключает обрезание длинного текста из-за ограничения media caption.
+
+## Изображения
+
+Pipeline ищет реальные фотографии минералов, а не генерирует изображения.
 
 При поиске:
 
 - приоритет у natural / mineral / rough / crystal specimen;
-- украшения, иллюстрации, рендеры и каталожные изображения штрафуются;
-- Wikimedia Commons может использоваться как лицензированный источник;
+- изображения проверяются по фактическим пикселям, размеру и формату;
+- украшения, иллюстрации и нерелевантные изображения штрафуются;
+- Wikimedia Commons используется как основной источник с понятной лицензией;
+- Google Images может использоваться как дополнительный источник;
 - URL, источник, лицензия, SHA-256 и perceptual hash сохраняются в SQLite;
-- повторно использованные или визуально похожие изображения штрафуются.
+- повторно использованные и визуально похожие изображения отбраковываются/штрафуются.
 
-> Наличие изображения в Google Images не означает наличие права на перепубликацию. Для production-использования рекомендуется отдавать приоритет источникам с понятной лицензией.
+> Наличие изображения в Google Images само по себе не означает наличие права на перепубликацию. Для production-использования следует отдавать приоритет источникам с понятной лицензией.
 
 ## Стек
 
@@ -60,29 +80,36 @@ Pipeline ищет **реальные фотографии**, а не генер�
 - SQLite
 - Groq / OpenAI-compatible API
 - Mistral API
-- Google Images / Custom Search (если настроен)
+- Google Images / Custom Search
 - Wikimedia Commons API
+- Wikipedia API
 
 ## Конфигурация
 
-Скопировать `.env.example` в `.env` и заполнить секреты:
+Секреты хранятся только в `.env` и не должны попадать в Git.
 
-```bash
-cp .env.example .env
-```
-
-Ключевые параметры:
+Основные параметры:
 
 ```env
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHANNEL_ID=@myminerals
 ADMIN_CHAT_ID=
+LOCAL_TZ=Europe/Moscow
+POST_TIMES=09:00,18:00
+AUTO_ENABLED=0
 
 GROQ_API_KEY=
+GROQ_BASE_URL=https://api.groq.com/openai/v1
 GROQ_MODEL=qwen/qwen3.6-27b
 
 MISTRAL_API_KEY=
+MISTRAL_BASE_URL=https://api.mistral.ai/v1
 MISTRAL_MODEL=mistral-small-latest
+
+LLM_TIMEOUT=90
+LLM_MAX_TOKENS=2200
+FACT_CHECK_ENABLED=1
+FACT_CHECK_THRESHOLD=0.72
 
 GOOGLE_CSE_API_KEY=
 GOOGLE_CSE_ID=
@@ -90,10 +117,6 @@ GOOGLE_HTML_ENABLED=1
 
 WIKIMEDIA_ENABLED=1
 STRICT_LICENSE=0
-
-LOCAL_TZ=Europe/Moscow
-POST_TIMES=09:00,18:00
-AUTO_ENABLED=0
 ```
 
 ## Локальный запуск
@@ -106,15 +129,13 @@ python -m py_compile main.py
 python main.py
 ```
 
-Тест в Telegram:
+Тест:
 
 ```text
-/test аметист
+/test кварц
 ```
 
 ## Production / systemd
-
-Пример service unit находится в `minerals-bot.service`.
 
 ```bash
 sudo cp minerals-bot.service /etc/systemd/system/
@@ -129,8 +150,4 @@ sudo systemctl start minerals-bot
 journalctl -u minerals-bot -f
 ```
 
-## Безопасность
-
-Секреты хранятся только в `.env` и **не должны попадать в Git**.
-
-База `minerals.db` также является локальным runtime-артефактом и не входит в репозиторий.
+База `minerals.db` является локальным runtime-артефактом и не входит в репозиторий.
